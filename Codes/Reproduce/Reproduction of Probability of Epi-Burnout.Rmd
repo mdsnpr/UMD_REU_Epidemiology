@@ -1,0 +1,463 @@
+---
+title: "Epi-Burnout Reproduce"
+output: html_notebook
+---
+
+```{r}
+library(burnout)
+library(adaptivetau)
+```
+
+# Figure 4
+
+```{r}
+Ns <- c(10^4, 10^5, 10^6, 10^7)
+logs <- c("x", "xy")
+# Ns <- c(10^4)
+# logs <- c("x")
+
+windows(width=10, height=12)
+pdf("Fig4-2.pdf", width=10, height=12)
+par(mfrow = c(length(Ns), length(logs)),
+    mar = c(4, 4, 2, 1))              
+
+xvals <- exp(seq(log(1.01), log(64), length=101))
+
+for(N in Ns) {
+  
+  P1vals <- P1_prob(xvals, epsilon = 0.01, N = N)
+  P1vals_MS <- c()
+  P1vals_vanH <- c()
+  P1vals_sim <- c()
+    
+  for(i in xvals) {
+    P1vals_MS <- c(P1vals_MS, P1_prob_MS(i, epsilon = 0.01, k = 1, N = N, subdivisions = 1000L, tiny = 0))
+    P1vals_vanH <- c(P1vals_vanH, P1_prob_vanH(i, epsilon = 0.01, k = 1, N = N, subdivisions = 1000L, persist = False, tiny = 0))
+    P1vals_sim <- c(P1vals_sim, classify_epi_outcomes(p = "P", delta = 0.0005, R0 = i, epsilon = 0.01, n = N, quiet = T))
+  }
+  
+  max(Im(P1vals))
+  cat("max(P1) = ", max(P1vals), "\n")
+  
+  # results are complex:
+  P1vals <- Re(P1vals)
+  P1vals_MS <- Re(P1vals_MS)
+  P1vals_vanH <- Re(P1vals_vanH)
+  
+  for(logscale in logs) {
+    
+    plot(xvals-1, P1vals, 
+         las=1, 
+         lwd=3,       # thickness 
+         lty=3,       # dotted line
+         col="black",   
+         type="l",    # line graph
+         log=logscale,     # log scaled
+         ylab="Persistent Probability",
+         xlab="Basic Reproduction number R_0 - 1")
+    
+    lines(xvals-1, P1vals_MS, 
+          col = "orange", 
+          lwd = 2, 
+          lty = 2)
+    
+    lines(xvals-1, P1vals_vanH, 
+          col = "skyblue", 
+          lwd = 2, 
+          lty = 2)
+    
+    lines(xvals-1, P1vals_sim, 
+          col = "grey", 
+          lwd = 2.5, 
+          lty = 2)
+    
+    # non-fizzling prob = 1 - 1/R₀
+    lines(xvals-1, 1 - 1 /(xvals),
+          col = "darkred",
+          lwd = 1.5,
+          lty = 1)
+    
+    legend("topleft",                                                                    # location
+           legend = c("lParsons", "MS", "vanH", "simulation", "non-fizzle prob"),        # method used
+           col = c("black", "orange", "skyblue", "grey", "darkred"),              
+           lty = c(3, 2, 2, 2, 1),                                                       # line type
+           lwd = c(3, 2, 2, 2.5, 1.5))                                                   # thickness
+  }
+}
+
+dev.off()
+```
+
+# Figure 5
+- 
+```{r}
+par(mar = c(5, 5, 4, 2))  # (bottom, left, top, right)
+pdf("Fig5-2.pdf", width=10, height=10)
+
+e_vals <- seq(0.0001, 0.02, length.out = 2000) 
+R0_vals <- seq(1, 32, length.out = 2000)           
+
+grid <- expand.grid(epsilon = e_vals, R0 = R0_vals)
+grid$persistence <- with(grid, P1_prob(R0, epsilon, N = 10^6))
+z_matrix <- matrix(grid$persistence, nrow = length(R0_vals), ncol = length(e_vals))
+
+gray_palette <- colorRampPalette(c("white", "darkgrey"))
+
+filled.contour(x = e_vals,
+        y = log(R0_vals),
+        z = z_matrix,
+        color.palette = gray_palette,
+        levels = c(10^(-12), 10^(-8), 10^(-4), 10^(-2), seq(0.1, 0.95, by = 0.1), 0.95),
+        xlab = "mean infectious period / mean lifetime (ε)",
+        ylab = "basic reproduction number (R_0)",
+        main = "Contours of Persistence Probability",
+        plot.axes = {
+                 axis_ticks <- log(c(1, 2, 4, 8, 16, 32))
+                 axis_labels <- c("1", "2", "4", "8", "16", "32")
+                 axis(1)
+                 axis(2, at = axis_ticks, labels = axis_labels, las = 1)})
+
+dev.off()
+```
+
+# Stochastic Simulation
+
+- Gillespie Version
+```{r}
+sir_vital <- function(R0, epsilon, N, k = 1, t_max = 1000) {
+  S <- N - k
+  I <- k
+  R <- 0
+  t <- 0
+
+  time_vec <- c(t)
+  S_vec <- c(S)
+  I_vec <- c(I)
+  R_vec <- c(R)
+  
+  beta <- R0
+  mu <- epsilon
+  gamma <- 1 - epsilon
+
+  while (t < t_max && I > 0) {
+    N <- S + I + R
+
+    # Rates by Event
+    rate_birth     <- mu * N
+    rate_infection <- beta * S * I / N
+    rate_recovery  <- gamma * I
+    rate_S_death   <- mu * S
+    rate_I_death   <- mu * I
+    rate_R_death   <- mu * R
+
+    rates <- c(
+      rate_birth,
+      rate_infection,
+      rate_recovery,
+      rate_S_death,
+      rate_I_death,
+      rate_R_death
+    )
+
+    rate_total <- sum(rates)
+
+    if (rate_total == 0) break
+
+    # Time Step Decision
+    dt <- rexp(1, rate_total)
+    t <- t + dt
+
+    # Event Decision
+    event <- sample(1:6, size = 1, prob = rates)
+
+    # Transitions
+    if (event == 1) {
+      S <- S + 1                         # Birth
+    } else if (event == 2) {
+      S <- S - 1; I <- I + 1             # Infection
+    } else if (event == 3) {
+      I <- I - 1; R <- R + 1             # Recovery
+    } else if (event == 4) {
+      S <- S - 1                         # S Death
+    } else if (event == 5) {
+      I <- I - 1                         # I Death
+    } else if (event == 6) {
+      R <- R - 1                         # R Death
+    }
+
+    time_vec <- c(time_vec, t)
+    S_vec <- c(S_vec, S)
+    I_vec <- c(I_vec, I)
+    R_vec <- c(R_vec, R)
+  }
+
+  return(list(time = time_vec, S = S_vec, I = I_vec, R = R_vec))
+}
+```
+
+- Adaptive Tau version
+```{r}
+sir_vital_adaptivetau <- function(R0, epsilon, N, k = 1, t_max = 1000) {
+
+  initial_state <- c(S = N - k, I = k, R = 0)
+
+  transitions <- list(
+    c(S = +1),                  
+    c(S = -1, I = +1),          
+    c(I = -1, R = +1),         
+    c(S = -1),               
+    c(I = -1),              
+    c(R = -1)
+  )
+
+  rate_func <- function(state, params, t) {
+    with(as.list(c(state, params)), {
+      N <- S + I + R
+      return(c(
+        mu * N,                 # birth
+        beta * S * I / N,       # infection
+        gamma * I,              # recovery
+        mu * S,                 # S death
+        mu * I,                 # I death
+        mu * R                  # R death
+      ))
+    })
+  }
+
+  params <- list(beta = R0, gamma = 1-epsilon, mu = epsilon)
+
+  out <- ssa.adaptivetau(
+    init.values = initial_state,
+    transitions = transitions,
+    rateFunc = rate_func,
+    params = params,
+    tf = t_max
+  )
+
+  return(as.data.frame(out))
+}
+```
+
+- adaptive tau version with vaccination
+```{r}
+sir_vital_adaptivetau_vacc <- function(R0, epsilon, N, k = 1, t_max = 1000,
+                                  nu, tv) {
+
+  # 초기 상태
+  initial_state <- c(S = N - k, I = k, R = 0)
+
+  # 반응 리스트 (백신 포함됨)
+  transitions <- list(
+    c(S = +1),                       # 출생
+    c(S = -1, I = +1),              # 감염
+    c(I = -1, R = +1),              # 회복
+    c(S = -1),                      # S 사망
+    c(I = -1),                      # I 사망
+    c(R = -1),                      # R 사망
+    c(S = -1, R = +1)               # 백신 접종
+  )
+
+  # 반응 속도 함수
+  rate_func <- function(state, params, t) {
+    with(as.list(c(state, params)), {
+      N <- S + I + R
+      vacc_rate <- ifelse(t >= tv, nu * S, 0)  # v(t)
+      return(c(
+        mu * N,                    # 출생
+        beta * S * I / N,          # 감염
+        gamma * I,                 # 회복
+        mu * S,                    # S 사망
+        mu * I,                    # I 사망
+        mu * R,                    # R 사망
+        vacc_rate                  # 백신 접종
+      ))
+    })
+  }
+
+  # 파라미터 정의
+  params <- list(beta = R0, gamma = 1 - epsilon, mu = epsilon, nu = nu, tv = tv)
+
+  # 시뮬레이션 실행
+  out <- ssa.adaptivetau(
+    init.values = initial_state,
+    transitions = transitions,
+    rateFunc = rate_func,
+    params = params,
+    tf = t_max
+  )
+
+  return(as.data.frame(out))
+}
+```
+
+- t_delta calculation 
+  - if I reaches 0 before t_delta, fizzle
+```{r}
+compute_t_delta <- function(R0, delta, k) {
+  if (R0 <= 1) return(Inf)
+  log_term <- log(((1 - delta)^(-1 / k) - 1 / R0) / ((1 - delta)^(-1 / k) - 1))
+  return(log_term / (R0 - 1))
+}
+```
+
+```{r}
+fizzle_prob_simulation <- function(delta, R0, epsilon, n, k = 1) {
+  m <- ceiling(1 / (4 * delta))
+  t_delta <- compute_t_delta(R0, delta, k = k)
+
+  fizzle_count <- 0
+
+  for (i in 1:m) {
+    sim <- sir_vital_adaptivetau(R0, epsilon, n, t_max = t_delta + 1)
+    died_out_before_tdelta <- any(sim$I == 0 & sim$time <= t_delta)
+    if (died_out_before_tdelta) {
+      fizzle_count <- fizzle_count + 1
+    }
+  }
+
+  fizzle_prob <- fizzle_count / m
+  return(list(
+    fizzle_prob = fizzle_prob,
+    total_simulations = m,
+    delta = delta,
+    t_delta = t_delta
+  ))
+}
+
+```
+
+```{r}
+classify_epi_outcomes <- function(p = "all", delta, R0, epsilon, n, k = 1, tau = 10, obs_window = 100, quiet = FALSE, nu = 0, tv = 0, vacc = FALSE) {
+  m <- ceiling(1 / (4 * delta))
+  t_delta <- compute_t_delta(R0, delta, k = k)
+
+  fizzle <- 0
+  burnout <- 0
+  persistence <- 0
+
+  for (i in 1:m) {
+    if (vacc) {
+      sim <- sir_vital_adaptivetau_vacc(R0, epsilon, n, k = k, t_max = t_delta + 300, nu = nu, tv = tv)      
+    } else {
+      sim <- sir_vital_adaptivetau(R0, epsilon, n, k = k, t_max = t_delta + 300)
+    }
+
+    # FIZZLE 판별
+    if (any(sim$I == 0 & sim$time <= t_delta)) {
+      fizzle <- fizzle + 1
+      if (!quiet) cat(sprintf("[%d] fizzle\n", i))
+      next
+    }
+
+    # 피크 이후 감염자 재성장 여부 확인
+    peak_time <- sim$time[which.max(sim$I)]
+    obs_start <- peak_time + 50
+    obs_end <- obs_start + obs_window
+
+    i_future <- sim$I[sim$time > obs_start & sim$time <= obs_end]
+
+    if (any(i_future >= tau)) {
+      persistence <- persistence + 1
+      if (!quiet) cat(sprintf("[%d] persistence\n", i))
+    } else {
+      burnout <- burnout + 1
+      if (!quiet) cat(sprintf("[%d] burnout\n", i))
+    }
+  }
+  if (p == "P") {
+    return(persistence / m)
+  } else if (p == "B") {
+    return(burnout / m)
+  } else if (p == "F") {
+    return(fizzle / m)
+  } else {
+    return(list(
+    fizzle_prob = fizzle / m,
+    burnout_prob = burnout / m,
+    persistence_prob = persistence / m,
+    total_simulations = m,
+    delta = delta,
+    t_delta = t_delta
+    )) 
+  }
+}
+```
+
+
+```{r}
+classify_epi_outcomes(p = "all", delta=0.0001, 10, 0.01, n = 10^4, k = 1, tau = 10, obs_window = 100, quiet = T, nu = 0, tv = 0, vacc = F)
+```
+
+```{r}
+classify_epi_outcomes(p = "all", delta=0.0001, 10, 0.01, n = 10^4, k = 1, tau = 10, obs_window = 100, quiet = T, nu = 0.1, tv = 50, vacc = T)
+```
+
+```{r}
+Ns <- c(10^4, 10^5)
+logs <- c("x", "xy")
+# Ns <- c(10^4)
+# logs <- c("x")
+
+windows(width=10, height=12)
+pdf("Fig4-2.pdf", width=10, height=12)
+par(mfrow = c(length(Ns), length(logs)),
+    mar = c(4, 4, 2, 1))              
+
+xvals <- exp(seq(log(1.01), log(64), length=101))
+
+for(N in Ns) {
+  
+  P1vals_sim_vacc1 <- c()
+  P1vals_sim_vacc2 <- c()
+  P1vals_sim <- c()
+    
+  for(i in xvals) {
+    P1vals_sim_vacc1 <- c(P1vals_sim_vacc1, classify_epi_outcomes(p = "P", delta = 0.0005, R0 = i, epsilon = 0.01, n = N, quiet = T, tv = 30, nu = 0.05, vacc = T))
+    P1vals_sim_vacc2 <- c(P1vals_sim_vacc2, classify_epi_outcomes(p = "P", delta = 0.0005, R0 = i, epsilon = 0.01, n = N, quiet = T, tv = 150,nu = 0.01, vacc = T))
+    P1vals_sim <- c(P1vals_sim, classify_epi_outcomes(p = "P", delta = 0.0005, R0 = i, epsilon = 0.01, n = N, quiet = T))
+  }
+  
+  # results are complex:
+  P1vals_sim_vacc1 <- Re(P1vals_sim_vacc1)
+  P1vals_sim_vacc2 <- Re(P1vals_sim_vacc2)
+  P1vals_sim <- Re(P1vals_sim)
+  
+  for(logscale in logs) {
+    
+    plot(xvals-1, P1vals_sim, 
+         las=1, 
+         lwd=3,       # thickness 
+         lty=3,       # dotted line
+         col="black",   
+         type="l",    # line graph
+         log=logscale,     # log scaled
+         ylab="Persistent Probability",
+         xlab="Basic Reproduction number R_0 - 1")
+    
+    lines(xvals-1, P1vals_sim_vacc1, 
+          col = "red", 
+          lwd = 2, 
+          lty = 2)
+    
+    lines(xvals-1, P1vals_sim_vacc2, 
+          col = "blue", 
+          lwd = 2, 
+          lty = 2)
+
+    # non-fizzling prob = 1 - 1/R₀
+    lines(xvals-1, 1 - 1 /(xvals),
+          col = "darkred",
+          lwd = 1.5,
+          lty = 1)
+    
+    legend("topleft",                                                                    # location
+           legend = c("sim. w/o vacc", "sim. with vacc (Strong&Early)", "sim. with vacc (Weak&Late)", "non-fizzle prob"),        # method used
+           col = c("black", "red", "blue", "darkred"),              
+           lty = c(3, 2, 2, 1),                                                       # line type
+           lwd = c(3, 2, 2, 1.5))                                                     # thickness
+  }
+}
+
+dev.off()
+```
+

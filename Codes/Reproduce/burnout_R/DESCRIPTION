@@ -1,0 +1,33 @@
+Package: burnout
+Title: Compute Probability of Epidemic Burnout
+Version: 0.0.5
+Authors@R: c(person("David", "Earn",
+  email = "earn@math.mcmaster.ca",
+  comment = c(ORCID = "0000-0002-7562-1341"),
+  role = c("aut", "cre")),
+  person("Ben", "Bolker",
+  role = c("aut"),
+  comment=c(ORCID="0000-0002-2127-0443"))
+  )
+Description: Compute the probability that an infectious disease --
+    modelled using the standard SIR or SIRS model -- persists beyond
+    an initial outbreak (or beyond any number of outbreaks).
+License: GPL (>= 3)
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.1
+Imports:
+    Rdpack,
+    gsl,
+    emdbook,
+    expint,
+    latex2exp,
+    dplyr,
+    ggplot2,
+    rlang,
+    deSolve
+RdMacros: Rdpack
+Suggests:
+    testthat (>= 3.0.0),
+    sirr
+Config/testthat/edition: 3
